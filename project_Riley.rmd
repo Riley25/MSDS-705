@@ -1,0 +1,534 @@
+---
+title: "Predicting Loan Defaults with Logistic Regression"
+author: "Riley Heiman"
+date: " "
+output:
+      prettydoc::html_pretty:
+        theme: cayman
+        highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+
+#  prettydoc::html_pretty:
+#    theme: cayman
+#    highlight: github
+require(HH)
+setwd("D:/Documents/R/705/project")
+credit = read.csv(file = "loans50k.csv")
+```
+
+# Part 1  
+
+
+### Executive Summary
+
+This report provides an analysis and evaluation of the current profitability model for World Bank. Every customer has a specific set of characteristics. These include employment status, current job role, a reason for the loan, geographic location/address, credit history (`grade`), number of open credit lines, number of derogatory public records including bankruptcy filings, tax liens, and many other similar characteristics as well. 
+
+One of the most significant expenses here at World Bank is the increasing amount of defaulting loans! How can we better *predict* whether or not someone will default on a loan ahead of time? Within a certain degree of accuracy, this model can make these predictions using some of the characteristics listed above.  
+
+By withholding a portion of the data during the model generation, we were able to test the accuracy of this model. In short, we found that the model can accurately predict a "good" loan v.s. "bad" loans, almost *80%* of the time. 
+
+
+---
+
+
+### Introduction
+
+Hello, 
+
+
+This document will outline the predictive model used for the advanced analytics department here at World Bank. One of our growing expense is the loss in revenue from default loans. The Executive Champion, Data Scientist, and Business Intelligence leader, who are listed in the executive summary above, have all played a pivotal role in the design and support for this model. Using historical data from the credit department, we were able to build a logistic regression that can be used to help mitigate this risk.
+
+This data set has exactly 50,000 previous loans and 32 variables associated with each one. Please note, Total Paid *("totalPaid")* cannot be one of our predictor variables, because this cannot be determined when clients initially apply for loans. This document will outline each stage of the model generation process and notes along the way. If any questions should arise please reach out to the Advanced Analytics team. 
+
+
+Riley Heiman 
+
+
+*-Data Scientist*
+
+---
+
+### Preparing and Cleaning the data
+
+
+Load Required Packages
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(ggformula)
+library(ggplot2)
+library(dplyr)
+library(moments)
+library(xlsx)
+library(plotly)
+library(ROCR)
+```
+
+
+
+*First we must remove any NA results*
+
+```{r}
+#The code below will remove any NA's from our data frame. 
+credit = na.omit(credit)
+```
+
+
+*Second we must change our response variable to the follwoing*
+
+
+Previous "Status" Value   | Changed to.....
+------------- | -------------
+Charged off | "Bad"
+Default | "Bad"
+Fully Paid | "Good"
+Current | *removed from data frame*
+In Grace Period | *removed from data frame*
+Late (16-30 days) | *removed from data frame*
+Late (31-120 days) | *removed from data frame*
+Blank / NA values | *removed from data frame*
+
+
+```{r}
+credit =
+  credit %>%
+  mutate(status = case_when(
+    status == "Charged Off" |status == "Default" ~1,
+    status == "Fully Paid"~ 0,
+    status == "Current" | status == "In Grace Period"| status == "Late (16-30 days)" | status == "Late (31-120 days)" ~ 2
+    #TRUE ~ "Something is wrong"
+  ))
+
+credit[, 'status'] <- as.factor(credit[, 'status'])
+
+summary(credit$status)
+#This table in important because it show how many are "Good" "Bad" and how many should be removed. 
+```
+
+*Please note....*
+
+Value   | Name
+------------- | -------------
+0 | "Good"
+1 | "Bad"
+2 | "Remove"
+
+
+We have successfully re-factored our status variable into three categories above. Now we must remove the third category "Remove" from our data using the code below. 
+
+
+```{r}
+# This will remove all oberservations that have the "Remove" label for the status variable.
+#credit$status = credit$status[!is.na(credit$status)]
+toBeRemoved<-which(credit$status==2)
+credit<-credit[-toBeRemoved,]
+credit$status = factor(credit$status)
+summary(credit$status)
+
+```
+
+Here we can see that he have retained all of our Bad and Good loan status values, but any loan label "Remove" has been deleted! Next we must re-categorize our variable "reason". Many of the variables have a low number of observations, so we can collect these together into one category called "other"
+
+Please see the code below for refrence. 
+
+
+```{r}
+
+summary(credit$reason)
+
+credit = 
+  credit%>%
+  mutate(reason = case_when(
+    reason == "house" | reason=="car" | reason =="home_improvement" | reason == "major_purchase" | reason == "medical" | reason == "moving" | reason == "other" | reason == "renewable_energy" | reason == "small_business" | reason == "vacation" | reason == "wedding" ~ "other",
+    reason == "credit_card"~"credit_card",
+    reason == "debt_consolidation"~"debt_consolidation"
+    ))
+
+credit[, 'reason'] <- as.factor(credit[, 'reason'])
+
+# This will combine our variables into 3 categories. 
+
+```
+
+
+
+
+
+
+Lastly, we can note the total number of observations removed. 
+
+
+```{r}
+a = 50000-dim(credit)[1]
+
+print(paste(c("Total number of observations removed is   ",a),collapse = ''))
+```
+
+
+
+---
+
+
+### Exploring and Transforming the data
+
+```{r}
+
+#View(sub_credit)
+
+credit_avg = 
+  credit%>%
+  group_by(status)%>%
+  summarise(meanAmount=mean(amount))
+
+#gf_col(meanAmount~status,data = credit_avg)
+print(credit_avg)
+```
+
+
+We can see in the table above that the average amount for Bad loans is 15466.09 and 14417.09 for good loans. Is there sufficient evidence to claim that bad loans have a greater amount then good loans? Let's find out by running a Welch Two Sample t-test!
+
+
+$$H_0: {\mu_{Bad}} < {\mu_{Good}}$$
+
+$$H_a: {\mu_{Bad}} \geq {\mu_{Good}}$$
+
+
+
+
+```{r}
+bad = credit$amount[credit$status==1]
+good = credit$amount[credit$status==0]
+mean(bad)
+mean(good)
+
+t.test(bad,good,alternative = "greater")
+```
+
+We have found a p-value $< {\alpha = .05}$. In the situation we must reject the null and accept the alternative. In other words, there is sufficent evidence to claim that the average credit amount for "Bad" loans are greater then "Good" loans! This is a significant finding for our results, because it enhances the importance of generating a strong predictive model.
+
+
+
+```{r}
+credit%>%
+  gf_histogram(~amount,data=credit,fill=~status,position = PositionDodge)
+summary(credit$status)
+```
+
+
+
+Additonally, we can see in the histogram above and the summary table that the total number of "Good" loans far exceedes the "Bad" loans. Almost 80% of loans are considered good. Moving forward, this will be a good target for us to hit in terms of our accuracy level. Accepting more bad loans could imply a loss in revune for the company. 
+
+```{r}
+
+gf_bar(~status,fill=~grade,position=position_dodge(),data=credit) + xlab(c("Good = 0                                                         Bad = 1"))
+
+```
+
+In order to understand the relationship between grade and status we have a bar chart above. Although the diagram is not normalized, we do however see the Good distribution is right skewed. The Bad distribution is more normal. 
+
+
+```{r}
+
+#y1 = credit$income[credit$status=="Bad"]
+#y2 = credit$income[credit$status=="Good"]
+
+credit%>%
+  gf_boxplot(income~status,fill = ~status)%>%
+  gf_lims(y=c(0,200000))
+
+```
+
+The boxplot above shows us that the income level for a particular client is generally the same for Bad and Good. All of these plots help us to determine which variables to include as predictor variables for our logistic regression. 
+
+---
+
+# Part 2
+
+### The Logistic Model
+
+
+
+
+There are many variables within our data frame and only certain ones may be most valuable to us. We can run the glm() function and  analyze the p-values associated with each predictor variable. Recall, we are testing:
+
+$$H_0 : {\beta_i} = 0$$
+
+$$H_a : {\beta_i} \neq 0$$
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+#Here we will use the select function...
+#attach(credit)  
+glm.out = glm(status~
+              amount
+              +term
+              +rate
+              +grade
+              +verified
+              +reason
+              +debtIncRat
+              +delinq2yr
+              +inq6mth
+              +totalRevLim
+              +accOpen24
+              #+avgBal
+              +totalLim
+              +totalRevBal
+              #+totalBcLim
+              +totalIlLim,
+              family = "binomial",data = credit)
+```
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+summary(glm.out)
+```
+
+Everytime we have a p-value $< {\alpha} = .05$ then we must reject the null hypothesis and accept the alternative. In other words, the table above shows a *majority* of variables where ${\beta_i} \neq 0$ . We have sufficent evidence to believe the ${\beta}$ estimates associated with each variable. 
+
+Please note, the best model selected above was generated with the `step()` function. The results are not shown above, because the output can be very lengthy. 
+
+Now that we have identified the key predictor variables, we can move forward with building our logistic regression. This is done by subsetting our data into testing and training sets. The function `select_rand_int(n,c)` will allows us to randomly subset our data by generating random numbers.
+
++ n = total number of observations in the data.
+
++ c = constant. (i.e. what % of the data should be selected?)   $where: 0<c<1$
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+select_rand_int = function(n,c){
+  
+  # PURPOSE: Function was intended for model generation. 
+  #         This function will select random intergers 1 through n. 
+  #         Where n = number of rows in our data frame.
+  #
+  #         c = constant. (i.e. what % of the data should be selected?)
+  #         0 < c < 1   
+  
+  for_max = round((1-c)*n,digits = 0)
+  df = seq(1,n,1)
+  test_data = NULL
+  
+  for (i in 1:for_max) {
+    new_number = round(runif(1,min=0,max = length(df)),digits = 0)
+    df = df[-new_number]
+    test_data[i] = new_number
+  }
+  print(paste(c("Total Number of Observations Removed = ",for_max),collapse = ''))
+  return(df)
+}
+```
+
+
+```{r}
+nrow = dim(credit)[1]
+c = .80
+random_subset = select_rand_int(nrow,c)
+#random_subset
+train_credit = credit[random_subset,]
+test_credit  = credit[-random_subset,]
+
+test_credit$status = as.factor(test_credit$status)
+train_credit$status = as.factor(train_credit$status)
+```
+
+---
+
+### Optimizing the Threshold for Accuracy
+
+Now that we have a random subset of our original data, we can now re-create the logistic regression with the same predictor variables, by selecting a subset generated from the step before.
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+glm_test1 = glm(status~
+              amount
+              +term
+              +rate
+              +grade
+              +verified
+              +reason
+              +debtIncRat
+              +delinq2yr
+              +inq6mth
+              +totalRevLim
+              +accOpen24
+              +totalLim
+              +totalRevBal
+              +totalIlLim,
+              family = "binomial",data = train_credit)
+
+```
+
+```{r}
+#summary output here.
+summary(glm_test1)
+```
+
+*Does this model make a good prediction?*
+
+```{r}
+threshold = .50
+
+# Plese note, we are using our test data for prediction. 
+pred = predict(glm_test1,newdata = test_credit,type = "response")
+
+# IF our prediciton result is greater then threshold,
+# THEN set value = 1
+# ELSE set value = 0
+pred = ifelse(pred > threshold,1,0)
+###################################
+
+# THIS IS WHAT ACTUALLY HAPPEND.
+test_check = test_credit$status
+
+Error <- mean(pred != test_check)
+print(paste(c("The error rate is..  ",round(Error*100,digits = 2)," %"),collapse = ''))
+```
+
+*What if we had a different threshold?*
+
+Lets test the model for threshold values 0 through 1. 
+
+
+```{r}
+seq = seq(0,1,.01)
+error_array = NULL
+j=1
+for (i in seq) {
+  pred = predict(glm_test1,newdata = test_credit,type = "response")
+  pred = ifelse(pred > i,1,0)
+  
+  test_check = test_credit$status
+  
+  Error <- mean(pred != test_check)
+  
+  error_array[j] = Error
+  j=j+1
+}
+data = as.data.frame(matrix(c(seq,error_array),ncol = 2))
+colnames(data) = c("Threshold","Error")
+
+ggplot(data = data,aes(x=Threshold, y=Error)) +
+  geom_line()
+
+```
+
+The graph above shows theoretical threshold set from 0 to 1. The error rate represents how accurate our model is for a given threshold. In short, a threshold of .50 is ideal as a decision bountry. 
+
+---
+
+### Optimizing the Threshold for Profit
+
+Profit is maximized when the predicitons for Bad loans is highly accurate. 
+
+*At what threshold is profit maximized?*
+
+```{r}
+
+pred = ifelse(pred > threshold,1,0)
+index<-which(pred==0)
+good_cases = test_credit[index,]
+TOTAL_REVENUE = sum(good_cases$totalPaid)
+###################################
+
+seq = seq(0,1,.01)
+error_array = NULL
+Rev_array = NULL
+j=1
+for (i in seq) {
+  pred = predict(glm_test1,newdata = test_credit,type = "response")
+  pred = ifelse(pred > i,1,0)
+  index<-which(pred==0)
+  good_cases = test_credit[index,]
+  TOTAL_REVENUE = sum(good_cases$totalPaid) - sum(good_cases$amount)
+  Rev_array[j] = TOTAL_REVENUE
+
+  j=j+1
+}
+data = as.data.frame(matrix(c(seq,Rev_array),ncol = 2))
+colnames(data) = c("Threshold","Profit")
+
+ggplot(data = data,aes(x=Threshold, y=Profit)) +
+  geom_line()
+
+```
+
+In the plot above, we can see revenue approaches a maximum when threshold reaches .375. This is consistent with our results previously. The plot above shows error starts to minimize at .375.  
+
+---
+
+
+### Results Summary 
+
+```{r echo=TRUE}
+pred = predict(glm_test1,newdata = test_credit,type = "response")
+pr <- prediction(pred, test_credit$status)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf,main = "ROC Curve")
+lines(seq(0,1,.05),seq(0,1,.05),type = 'c',lwd=1.5)
+```
+
+
+```{r}
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+print(paste(c("The area under the curve is ",round(auc,digits = 3)),collapse = ''))
+```
+
+
+We can see by the ROC curve above that our model does a very good job! Here are the summary findings:
+
+1. The best threshold to maximize profits, and accuracy is .375
+
+2. The original data frame had 50,000 cases, but 15,729 were removed. This leaves us with exactly 34,271 loans.
+
+3. There are exactly 14 *significant* predictor variables for our final logistic regression model, these are: 
+    + amount
+    + term
+    + rate
+    + grade
+    + verified
+    + reason
+    + debtIncRat
+    + delinq2yr
+    + inq6mth
+    + totalRevLim
+    + accOpen24
+    + totalLim
+    + totalRevBal
+    + totalIlLim
+
+
+4. The model was accurately able to predict 5,300 casses out of a test sample of 6,854. The model was successfully able to predict "good" and "bad" cases 77% of the time. $$\frac{5,300}{6,854} = 77.32 \%$$   
+
+---
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+threshold = .375
+
+# Plese note, we are using our test data for prediction. 
+pred = predict(glm_test1,newdata = test_credit,type = "response")
+
+# IF our prediciton result is greater then threshold,
+# THEN set value = 1
+# ELSE set value = 0
+pred = ifelse(pred > threshold,1,0)
+act = test_credit$status
+
+n_wrong = NULL #These are the times we predicted wrong.
+for (i in 1:length(act)) {
+  if(pred[i]==0 & act[i]==1 | pred[i]==1 & act[i]==0){
+    n_wrong[i] = i 
+  }
+}
+n_wrong = n_wrong[!is.na(n_wrong)]
+```
+
+
